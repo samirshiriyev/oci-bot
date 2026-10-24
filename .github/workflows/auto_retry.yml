@@ -1,0 +1,56 @@
+name: OCI Provisioner Auto Retry
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '*/15 * * * *' # Hər 15 dəqiqədən bir avtomatik yoxlayır
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+
+      - name: Create OCI Private Key File
+        run: |
+          echo "${{ secrets.OCI_KEY_FILE }}" > oci_api_key.pem
+          chmod 600 oci_api_key.pem
+
+      - name: Terraform Init
+        run: terraform init
+
+      - name: Terraform Apply (Auto Retry Loop)
+        run: |
+          MAX_RETRIES=20
+          COUNT=0
+          SUCCESS=0
+
+          while [ $COUNT -lt $MAX_RETRIES ]; do
+            COUNT=$((COUNT + 1))
+            echo "Cəhd cəmi: $COUNT / $MAX_RETRIES"
+            
+            if terraform apply -auto-approve \
+              -var="tenancy_ocid=${{ secrets.OCI_TENANCY_OCID }}" \
+              -var="user_ocid=${{ secrets.OCI_USER_OCID }}" \
+              -var="fingerprint=${{ secrets.OCI_FINGERPRINT }}" \
+              -var="private_key=oci_api_key.pem" \
+              -var="region=${{ secrets.OCI_REGION }}" \
+              -var="ssh_public_key=${{ secrets.SSH_PUBLIC_KEY }}"; then
+              
+              echo "Server uğurla yaradıldı!"
+              SUCCESS=1
+              break
+            else
+              echo "Resurs tapılmadı (Out of Capacity) və ya xəta baş verdi. 30 saniyə gözləyib yenidən yoxlayırıq..."
+              sleep 30
+            fi
+          done
+
+          if [ $SUCCESS -eq 0 ]; then
+            echo "Maksimum cəhd limitinə çatıldı, lakin server hələ yerləşmədi. Növbəti avtomatik cəhddə yenidən yoxlanılacaq."
+            exit 1
+          fi
